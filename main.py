@@ -6,13 +6,13 @@ from kde import kernel_density
 
 from tensor_estimate import vrs_prediction
 
-from plot_samples import plot_3d_samples, plot_2d_samples
+from utils import plot_3d_samples, plot_2d_samples, energy_distance, energy_distance_perm_test
 
 # from full_tensor import compute_full_tensor
 
 
-dim = 3
-N_train = 5000
+dim = 7
+N_train = 10000
 N_samples = 1000
 
 ##############tuning parameter selection
@@ -34,7 +34,7 @@ lr_rec = 0
 kde_rec = 0
 
 distribution = gaussian_mixture(dim, [1, -1], [1, 0.5])
-for rr in range(10):
+for rr in range(1):
     X_train = distribution.generate(N_train)
     N_test = 1000
     X_test = distribution.generate(N_test)
@@ -60,7 +60,10 @@ for rr in range(10):
 
 samples = vrs_model.sampling_N_ori_domain(N_samples)
 
-#compare_first_dim_stats(X_train, samples, distribution=distribution)
+ED2 = energy_distance(X_train, samples)
+print("Energy distance^2:", ED2)
+
+
 if dim == 2:
     plot_2d_samples(X_train, samples)
 if dim == 3:

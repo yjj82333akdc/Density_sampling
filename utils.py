@@ -1,6 +1,66 @@
 # python
 import matplotlib.pyplot as plt
+import numpy as np
 
+#for comparison of two samples
+def energy_distance(X, Y):
+    """
+    X: array (n, d)
+    Y: array (m, d)
+    returns: energy distance (scalar)
+    """
+    X = np.asarray(X)
+    Y = np.asarray(Y)
+    n, m = X.shape[0], Y.shape[0]
+
+    # pairwise distances
+    d_xy = np.linalg.norm(X[:, None, :] - Y[None, :, :], axis=2)  # (n, m)
+    d_xx = np.linalg.norm(X[:, None, :] - X[None, :, :], axis=2)  # (n, n)
+    d_yy = np.linalg.norm(Y[:, None, :] - Y[None, :, :], axis=2)  # (m, m)
+
+    # unbiased estimates (ignore diagonal for xx, yy)
+    term_xy = 2.0 * d_xy.mean()
+    if n > 1:
+        term_xx = d_xx[np.triu_indices(n, k=1)].mean()
+    else:
+        term_xx = 0.0
+    if m > 1:
+        term_yy = d_yy[np.triu_indices(m, k=1)].mean()
+    else:
+        term_yy = 0.0
+
+    ed2 = term_xy - term_xx - term_yy  # squared energy distance
+    return abs(ed2)
+
+
+def energy_distance_perm_test(X, Y, n_perm=500, random_state=None):
+    """
+    Returns (ED, p_value) using a permutation test.
+    """
+    rng = np.random.default_rng(random_state)
+    X = np.asarray(X)
+    Y = np.asarray(Y)
+    n, m = X.shape[0], Y.shape[0]
+
+    ed_obs = energy_distance(X, Y)
+
+    Z = np.vstack([X, Y])
+    N = n + m
+    count = 0
+
+    for _ in range(n_perm):
+        perm = rng.permutation(N)
+        Xp = Z[perm[:n]]
+        Yp = Z[perm[n:]]
+        ed_perm = energy_distance(Xp, Yp)
+        if ed_perm >= ed_obs:
+            count += 1
+
+    p_value = (count + 1) / (n_perm + 1)  # permutation p-value
+    return ed_obs, p_value
+
+
+#for plotting samples when d=2 or 3
 def plot_3d_samples(X_train, samples, title="3D Samples with all pairwise projections"):
     """
     Plot 3D scatter of (x0,x1,x2) and all three 2D projections:

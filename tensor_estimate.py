@@ -192,7 +192,7 @@ class vrs_prediction:
 
     def F(self, X_, x):
         """
-        CDF F(X_, x) = \int_0^x p(x_k | X_) dx_k
+        CDF F(X_, x) = int_0^x p(x_k | X_) dx_k
         where p(x_k | X_) is the conditional density of x_k given previous X_.
         """
         if x <= 0.0:
