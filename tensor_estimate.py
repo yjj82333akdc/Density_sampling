@@ -1,6 +1,5 @@
 from polynomial import generate_basis_vector_given_coordinates, generate_new_basis_vector
 import numpy as np
-from scipy.integrate import quad
 
 class compute_rank_one:
     # we compute rank 1 tensor given basis_val
@@ -121,6 +120,28 @@ class vrs_prediction:
 
         self.A_predict = self.A_predict / N_train
 
+        # precompute contracted cores for all prefixes k = 0..dim
+        self._precompute_contracted_cores()
+
+    def _precompute_contracted_cores(self):
+        """
+        Precompute B_k = A_predict x_{j>=k} c_j^T for k = 0..D.
+
+        For each k, we contract A_predict along modes j = k, ..., D-1
+        with the first column of cur_basis[j].  B_k is then reused
+        in compute_density and F / F_inverse.
+        """
+        D = self.dim
+        self._core_prefix = [None] * (D + 1)
+
+        for k in range(D + 1):
+            B = self.A_predict
+            if k < D:
+                for j in reversed(range(k, D)):
+                    vec = self.cur_basis[j][:, 0]
+                    B = np.tensordot(B, vec, axes=([j], [0]))
+            self._core_prefix[k] = B
+
     def predict_one_x(self, X_test):
         X_test_transform = self.new_domain.compute_data(X_test)
         X_test_transform = np.clip(X_test_transform, 0, 1)
@@ -139,17 +160,9 @@ class vrs_prediction:
 
     def contract_core(self, k):
         """
-        Compute A_predict x_{j=k+1}^D c_j^T:
-        - contracts self.A_predict along modes (k+1)..(D) with vectors
-          c_j = self.cur_basis[j][:,0].
-        - returns the resulting tensor with modes 0..k remaining.
+        Return precomputed contracted core B_k.
         """
-        B = self.A_predict
-        D = self.dim
-
-        # if k is the last mode index or beyond, nothing to contract
-        if k >= D:
-            return B
+        return self._core_prefix[k]
 
         # contract modes j = D down to k+1
         for j in reversed(range(k, D)):
@@ -190,64 +203,90 @@ class vrs_prediction:
         else:
             return joint_density / marginal_density
 
-    def F(self, X_, x):
-        """Analytic CDF F(X_, x) = ∫_0^x p(x_k | X_) dx_k using basis integrals."""
+
+    def _conditional_info(self, X_):
+        """
+        For a fixed prefix X_ = (x_1,...,x_{k-1}), compute:
+
+        - marginal_density = p(X_)
+        - coeff_vec: coefficients of the basis for x_k in the expansion
+        - basis_k:   new_basis object for dimension k
+
+        This is reused many times in F_inverse.
+        """
+        k_minus_1 = len(X_)
+        D = self.dim
+        if k_minus_1 > D:
+            raise ValueError("Prefix length exceeds dimension")
+
+        k = k_minus_1 + 1
+
+        # no previous coordinates: p(empty) := 1, coeff_vec is just B_1
+        if k_minus_1 == 0:
+            marginal_density = 1.0
+            coeff_vec = self.contract_core(k)  # shape (r_0,)
+        else:
+            # enlarge X_ for basis evaluation (same as compute_density)
+            if 0 < k_minus_1 < D:
+                X_enlarged = X_ + [0.0] * (D - k_minus_1)
+            else:
+                X_enlarged = X_
+
+            basis_prev = self.generate_new_basis_vector.compute_basis_val(X_enlarged)[:k_minus_1]
+
+            # marginal density p(X_)
+            Bm = self.contract_core(k_minus_1)      # core for modes 0..k-2
+            marginal_density = np.tensordot(basis_prev[0], Bm, axes=(0, 0))
+            for dd in range(1, k_minus_1):
+                marginal_density = np.tensordot(basis_prev[dd], marginal_density, axes=(0, 0))
+
+            # coefficients for the k-th coordinate
+            Bk = self.contract_core(k)              # core for modes 0..k-1
+            coeff_vec = np.tensordot(basis_prev[0], Bk, axes=(0, 0))
+            for dd in range(1, k_minus_1):
+                coeff_vec = np.tensordot(basis_prev[dd], coeff_vec, axes=(0, 0))
+
+        basis_k = self.generate_new_basis_vector.basis[k_minus_1]
+        return float(marginal_density), coeff_vec, basis_k
+
+    def F(self, X_, x, cache=None):
+        """
+        Analytic CDF F(X_, x) = ∫_0^x p(x_k | X_) dx_k using basis integrals.
+
+        Optionally accepts a precomputed cache = (marginal_density, coeff_vec, basis_k)
+        from _conditional_info to avoid recomputing contractions.
+        """
         # trivial bounds
         if x <= 0.0:
             return 0.0
         elif x >= 1.0:
             return 1.0
 
-        k_minus_1 = len(X_)      # number of already-fixed coordinates
-        k = k_minus_1 + 1
-        if k > self.dim:
-            raise ValueError("Length of X_ + 1 exceeds dimension in F().")
+        if cache is None:
+            marginal_density, coeff_vec, basis_k = self._conditional_info(X_)
+        else:
+            marginal_density, coeff_vec, basis_k = cache
 
-        # denominator: marginal density p(X_)
-        marginal_density = self.compute_density(X_)
         if marginal_density <= 0.0:
             return 0.0
 
-        # 1) contract A_predict over modes j >= k, as in compute_density for length-k input
-        B = self.contract_core(k)    # shape: (r_0, ..., r_{k-1})
-
-        # 2) contract over the first k-1 coordinates with basis values at X_
-        if k_minus_1 > 0:
-            if 0 < k_minus_1 < self.dim:
-                X_enlarged = X_ + [0.0] * (self.dim - k_minus_1)
-            else:
-                X_enlarged = X_
-            basis_prev = self.generate_new_basis_vector.compute_basis_val(X_enlarged)[:k_minus_1]
-
-            coeff_vec = np.tensordot(basis_prev[0], B, axes=(0, 0))
-            for dd in range(1, k_minus_1):
-                coeff_vec = np.tensordot(basis_prev[dd], coeff_vec, axes=(0, 0))
-        else:
-            # no previous coordinates: B is already the coefficient vector in dim 0
-            coeff_vec = B
-
-        # coeff_vec now has shape (r_{k-1},) and represents the coefficients of the
-        # new basis φ_j for the k-th coordinate.
-        # 3) Integrate φ_j from 0 to x analytically and take the dot product.
-        basis_integrals_k = self.generate_new_basis_vector.basis[k_minus_1] \
-            .compute_integral_single_x_new_basis(x)
-
+        # integrate basis of k-th coordinate and take dot product
+        basis_integrals_k = basis_k.compute_integral_single_x_new_basis(x)
         joint_integral = float(np.tensordot(basis_integrals_k, coeff_vec, axes=(0, 0)))
 
         F_val = joint_integral / marginal_density
-        # clamp small numerical noise
         if F_val < 0.0:
             F_val = 0.0
         elif F_val > 1.0:
             F_val = 1.0
         return float(F_val)
 
-
-
     def F_inverse(self, X_, y, low=0.0, high=1.0, tol=1e-6, max_iter=50):
         """
         Find x_k in [0,1] such that F(X_, x_k) = y using bisection.
-        Robust to tiny numerical mismatch at the endpoints by clamping y into [f_low, f_high].
+
+        Uses cached conditional info for this X_ so that each F-evaluation
+        is O(r_k) instead of recomputing all tensor contractions.
         """
         low = float(np.clip(low, 0.0, 1.0))
         high = float(np.clip(high, 0.0, 1.0))
@@ -255,52 +294,71 @@ class vrs_prediction:
 
         if y <= 0.0:
             return 0.0
+        if y >= 1.0:
+            return 1.0
 
-        f_low = float(self.F(X_, low))
-        f_high = float(self.F(X_, high))
+        cache = self._conditional_info(X_)
+        marginal_density, coeff_vec, basis_k = cache
+        if marginal_density <= 0.0:
+            # degenerate; fall back to uniform
+            return y
+
+        def F_cached(x):
+            if x <= 0.0:
+                return 0.0
+            if x >= 1.0:
+                return 1.0
+            basis_integrals_k = basis_k.compute_integral_single_x_new_basis(x)
+            joint_integral = float(np.tensordot(basis_integrals_k, coeff_vec, axes=(0, 0)))
+            val = joint_integral / marginal_density
+            return float(np.clip(val, 0.0, 1.0))
+
+        f_low = F_cached(low)
+        f_high = F_cached(high)
 
         if abs(f_low - y) <= tol:
             return low
         if abs(f_high - y) <= tol:
             return high
 
-        # allow small numerical slack: clamp y into [f_low, f_high] if within tol
+        # allow small slack
         if y < f_low - tol:
             y = f_low
         elif y > f_high + tol:
             y = f_high
         else:
-            # if y sits slightly outside due to roundoff, clamp to endpoints
             y = float(np.clip(y, f_low, f_high))
 
         a, b = low, high
         fa, fb = f_low, f_high
         for _ in range(max_iter):
             m = 0.5 * (a + b)
-            fm = float(self.F(X_, m))
-            if abs(fm - y) <= tol:
+            fm = F_cached(m)
+            if abs(fm - y) <= tol or (b - a) <= 1e-12:
                 return float(m)
             if fm < y:
                 a, fa = m, fm
             else:
                 b, fb = m, fm
-            if (b - a) <= 1e-12:
-                break
 
         return float(0.5 * (a + b))
+
 
     def sampling_one_x(self):
         X_ = []
         for i in range(self.dim):
-            x_i = self.F_inverse(X_, np.random.uniform(0.0, 1.0))
+            u = np.random.uniform(0.0, 1.0)
+            x_i = self.F_inverse(X_, u)
             X_.append(x_i)
-        return np.array(X_)
+        return np.array(X_, dtype=float)
 
     def sampling_N(self, N):
         if N <= 0:
             raise ValueError("N must be positive.")
-        rows = [np.asarray(self.sampling_one_x(), dtype=float) for _ in range(N)]
-        return np.vstack(rows)  # shape: (N, dim)
+        Z = np.empty((N, self.dim), dtype=float)
+        for n in range(N):
+            Z[n, :] = self.sampling_one_x()
+        return Z
 
     def sampling_N_ori_domain(self, N):
         Z_samples = self.sampling_N(N)

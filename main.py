@@ -1,22 +1,22 @@
 import numpy as np
-
+import time
 from gaussian_mixture import gaussian_mixture
 
 from kde import kernel_density
 
 from tensor_estimate import vrs_prediction
 
-from utils import plot_3d_samples, plot_2d_samples, energy_distance, energy_distance_perm_test
-
-# from full_tensor import compute_full_tensor
-
+from utils import plot_3d_samples, plot_2d_samples, energy_distance,compare_mean_var
 
 dim = 7
 N_train = 10000
 N_samples = 1000
 
 ##############tuning parameter selection
+lr_rec = 0
+kde_rec = 0
 MM = 10
+
 if N_train < 2 ** dim * MM:
     print('insufficient data')
     LL = 1
@@ -29,9 +29,6 @@ tensor_shape = [LL for _ in range(dim)]
 tensor_shape[0] = MM
 
 #########################################
-
-lr_rec = 0
-kde_rec = 0
 
 distribution = gaussian_mixture(dim, [1, -1], [1, 0.5])
 for rr in range(1):
@@ -57,13 +54,25 @@ for rr in range(1):
 
 
 #Sampling:
-
+start = time.perf_counter()
 samples = vrs_model.sampling_N_ori_domain(N_samples)
+elapsed = time.perf_counter() - start
 
+#accuracy evaluation
 ED2 = energy_distance(X_train, samples)
 print("Energy distance^2:", ED2)
 
+(mean_train, mean_samples, var_train, var_samples,
+ ss_mean_diff, ss_var_diff, ss_total,) = compare_mean_var(X_train, samples)
+print("SS(mean diff) / dim =", ss_mean_diff / dim)
+print("SS(var  diff) / dim =", ss_var_diff / dim)
+print("SS(total) / dim     =", ss_total / dim)
 
+#timing
+print(f"Sampling {N_samples} points in dim={dim} took {elapsed:.4f} seconds")
+print(f"time per point ≈ {elapsed / N_samples:.6e} seconds")
+
+#plot the samples when d=2 or 3
 if dim == 2:
     plot_2d_samples(X_train, samples)
 if dim == 3:

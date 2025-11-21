@@ -59,6 +59,70 @@ def energy_distance_perm_test(X, Y, n_perm=500, random_state=None):
     p_value = (count + 1) / (n_perm + 1)  # permutation p-value
     return ed_obs, p_value
 
+def compare_mean_var(X_train, samples, name_train="X_train", name_samples="samples"):
+    """
+    Compare per-dimension mean and variance between X_train and samples.
+
+    Returns
+    -------
+    mean_train, mean_samples, var_train, var_samples : np.ndarray
+        Per-dimension means and variances.
+    ss_mean_diff : float
+        Sum of squares of per-dimension mean differences:
+            sum_j (mean_samples[j] - mean_train[j])^2
+    ss_var_diff : float
+        Sum of squares of per-dimension variance differences:
+            sum_j (var_samples[j] - var_train[j])^2
+    ss_total : float
+        ss_mean_diff + ss_var_diff
+    """
+    X_train = np.asarray(X_train)
+    samples  = np.asarray(samples)
+
+    if X_train.ndim != 2 or samples.ndim != 2:
+        raise ValueError("X_train and samples must be 2D arrays.")
+    if X_train.shape[1] != samples.shape[1]:
+        raise ValueError(
+            f"Dim mismatch: X_train has dim={X_train.shape[1]}, "
+            f"samples has dim={samples.shape[1]}."
+        )
+
+    d = X_train.shape[1]
+
+    mean_train    = X_train.mean(axis=0)
+    mean_samples  = samples.mean(axis=0)
+    var_train     = X_train.var(axis=0)
+    var_samples   = samples.var(axis=0)
+
+    diff_mean = mean_samples - mean_train
+    diff_var  = var_samples - var_train
+
+    ss_mean_diff = float(np.sum(diff_mean ** 2))
+    ss_var_diff  = float(np.sum(diff_var ** 2))
+    ss_total     = ss_mean_diff + ss_var_diff
+
+    print("\nPer-dimension mean / variance comparison")
+    header = (
+        f"{'dim':>3} | {name_train}_mean | {name_samples}_mean | diff_mean "
+        f"| {name_train}_var | {name_samples}_var | diff_var"
+    )
+    print(header)
+    print("-" * len(header))
+
+    for j in range(d):
+        print(
+            f"{j:3d} | "
+            f"{mean_train[j]: .6f} | {mean_samples[j]: .6f} | {diff_mean[j]: .6f} | "
+            f"{var_train[j]: .6f} | {var_samples[j]: .6f} | {diff_var[j]: .6f}"
+        )
+
+    print("\nSum of squares:")
+    print(f"  mean diff SS = {ss_mean_diff:.6e}")
+    print(f"  var  diff SS = {ss_var_diff:.6e}")
+    print(f"  total SS     = {ss_total:.6e}")
+
+    return mean_train, mean_samples, var_train, var_samples, ss_mean_diff, ss_var_diff, ss_total
+
 
 #for plotting samples when d=2 or 3
 def plot_3d_samples(X_train, samples, title="3D Samples with all pairwise projections"):
